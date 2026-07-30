@@ -92,11 +92,9 @@
 - 아이패드는 셀룰러 데이터가 없어 **핸드폰 개인 핫스팟**으로 대체하여 연결
 - **시연 완료**
 
-### ⏳ Phase 10 — A건물(다른 네트워크) 검증 (내일 예정)
-- 원래는 노트북이 준비 안 돼 핸드폰으로 대체할 계획이었으나, **A건물에 이미 있는 노트북**으로 PC 대 PC 검증 진행 예정
-- 노트북은 신규 클라이언트라 현장에서 WireGuard 설치 + 새 키 생성 + 서버에 피어 등록(`10.8.0.5`)부터 해야 함 — 아래 "다음에 할 일" 참고
-- 방법: 노트북을 A건물 자체 와이파이에 연결 → WireGuard 터널 ON → 집 PC(`10.8.0.2`)와 ping/RDP 테스트
-- 실패 시 모바일 핫스팟 등으로 전환해서 재시도(그 자체가 "이 건물망이 UDP를 막는다"는 유의미한 결과)
+### ⚠️ Phase 10 — A건물(다른 네트워크) 검증 (2026-07-30 진행)
+- **노트북 연결: 실패 (원인 미해결)** — A건물에 있던 노트북을 신규 클라이언트(`10.8.0.5/24`)로 등록해서 PC 대 PC 검증을 시도했으나 끝내 handshake조차 성립하지 않음. 상세 원인 분석은 4번 트러블슈팅 표 참고.
+- **폰 연결: 성공** — 폰은 A건물 와이파이에서 집 PC(`10.8.0.2`)로 ping 성공 확인. 최종적으로 **폰으로 A건물↔집 PC 이종 네트워크 검증 완료**, 노트북은 포기하고 폰으로 대체.
 - 전날 밤 Azure VM은 할당 취소(Deallocate)해도 무방 — Standard 고정 IP는 유지되므로 재시작해도 `20.249.40.254` 그대로
 
 ---
@@ -116,6 +114,8 @@
 | ADB pair 시 "포트"에 6자리 숫자 입력 | 화면에 같이 뜨는 "페어링 코드"(6자리)와 "IP:포트"를 혼동 | `adb pair <IP>:<포트> <6자리코드>` 형식으로 분리 입력 |
 | 밤새 자고 일어나니 폰 Windows App(RDP)에서 "네트워크 문제" | PC의 WireGuard 터널 서비스(`WireGuardTunnel$wg0-pc`)가 Stopped 상태 (PC 절전/재시작 등으로 죽음) | WireGuard GUI 앱에서 `wg0-pc` 터널 **Activate** |
 | 위 조치 후 PC→폰 ping(10.8.0.3)은 되는데 폰→PC ping(10.8.0.2)은 안 됨 | `wg0-pc` 어댑터의 네트워크 프로필이 **Public**으로 설정되어 있어 Windows 방화벽이 인바운드 ICMP(ping)를 차단 (`CoreNet-Diag-ICMP4-EchoRequest-In` 규칙 비활성) | 어댑터를 **Private**로 전환(`Set-NetConnectionProfile`) + 해당 방화벽 규칙 활성화(`Enable-NetFirewallRule`) |
+| (2026-07-30) 서버에서 `wg set wg0 peer <값> allowed-ips 10.8.0.5/32` 실행해도 `wg show`에 노트북 피어가 안 뜸 | 넣은 공개키가 노트북 공개키가 아니라 **서버 자기 자신의 공개키**였음 (WireGuard는 자기 자신을 피어로 등록하는 요청은 에러 없이 조용히 무시함) | 노트북 앱의 "인터페이스 공개키"(`NNq6pJl9jBeBQteEXlBxVjlvLyQe0cX9zAJSdiiOzF0=`)를 정확히 복사해 재등록 |
+| 키를 올바르게 재등록한 후에도 노트북에서 handshake가 계속 안 뜨고 ping도 "요청 시간 만료" | 여러 원인 순차적으로 배제해봄: ① Windows 방화벽 Public 프로필 의심 → 방화벽 전체 비활성화(`Set-NetFirewallProfile -Enabled False`)해도 동일 ② A건물 와이파이의 UDP 차단 의심 → 노트북을 폰 핫스팟으로 전환해도 동일하게 실패 ③ 일반 인터넷(TCP 80/443)은 두 네트워크 모두 정상 → 네트워크 자체 문제가 아니라 **노트북 쪽에서 UDP 패킷이 아예 NIC 밖으로 안 나가거나 중간에 가로채지는 것으로 추정**. 서버 `wg show`에 해당 피어의 endpoint/handshake/transfer 항목 자체가 안 뜨는 것으로 확인(서버가 패킷을 한 번도 못 받음) | **미해결.** `tasklist`에서 `cowork-svc.exe`, `collector_service.exe`, `telemetry_agent.exe` 등 낯선 프로세스 발견(코워킹 스페이스/자산관리 에이전트로 추정) — 노트북이 관리형 기기라 네트워크 무관하게 OS 레벨에서 UDP를 차단하고 있을 가능성. 원인 규명은 추후로 미루고 **폰으로 A건물 검증 대체 진행** |
 
 ---
 
@@ -147,9 +147,10 @@
 
 ## 6. 다음에 할 일
 
-1. **A건물 노트북을 새 WireGuard 클라이언트로 등록**
-   - 노트북: WireGuard 앱 설치 → "빈 터널 추가"로 키 쌍 자동 생성 → `[Interface] Address=10.8.0.5/24` + `[Peer] PublicKey=<서버 공개키>, Endpoint=<서버 공인IP>:51820, AllowedIPs=10.8.0.0/24, PersistentKeepalive=25`로 설정 작성
-   - 서버: 노트북 공개키를 `wg set wg0 peer <노트북_공개키> allowed-ips 10.8.0.5/32` + `wg-quick save wg0`로 피어 등록
-2. 내일 A건물에서 노트북으로 이종 네트워크 검증 — 터널 ON 후 `10.8.0.2`(집 PC) ping/RDP 테스트 (VM 사전 기동 확인)
+1. **(보류) 노트북이 왜 UDP를 못 내보내는지 원인 규명**
+   - `cowork-svc.exe` / `collector_service.exe` / `telemetry_agent.exe`의 정체 확인 (`wmic process where "name='<프로세스명>'" get ExecutablePath`로 설치 경로 확인 → 제조사 특정)
+   - Wireshark로 `udp.port == 51820` 필터 걸고 실제로 NIC 밖으로 패킷이 나가는지 캡처해서 확인 (지금까지는 서버 쪽 `wg show`에 해당 피어의 endpoint 자체가 안 찍혀서, 패킷이 나가는지 중간에 막히는지 구분을 못한 상태)
+   - 급한 작업은 아니므로 시간 될 때 진행
+2. ~~내일 A건물에서 노트북으로 이종 네트워크 검증~~ → **완료(폰으로 대체)**: 2026-07-30 A건물 와이파이에서 폰으로 집 PC(`10.8.0.2`) ping 성공 확인
 3. (보류) PC→아이패드 화면 미러링 — AirPlay 수신 프로그램 방식은 가능성만 확인, 필요시 추후 시도
 4. 전체 캡처/녹화 영상 정리 — 개인키·QR코드 노출 여부 검수 후 포트폴리오용으로 편집
